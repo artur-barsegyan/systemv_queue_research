@@ -1,0 +1,60 @@
+From 3516e40b4f8cb05eff8516c226fd327e3a58084f Mon Sep 17 00:00:00 2001
+From: Artur Barsegyan <a.barsegyan96@gmail.com>
+Date: Sat, 23 May 2020 23:00:01 +0300
+Subject: [PATCH] ipc/msg.c: wake up senders until there is a queue empty
+ capacity
+
+Take into account the total size of the already enqueued messages of
+previously handled senders before another one.
+
+Otherwise, we have serious degradation of receiver throughput for
+case with multiple senders because another sender wakes up,
+checks the queue capacity and falls into sleep again.
+
+Each round-trip wastes CPU time a lot and leads to perceptible
+throughput degradation.
+
+Source code of:
+	- sender/receiver
+	- benchmark script
+	- ready graphics of before/after results
+
+is located here: https://github.com/artur-barsegyan/systemv_queue_research
+
+Signed-off-by: Artur Barsegyan <a.barsegyan96@gmail.com>
+---
+ ipc/msg.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/ipc/msg.c b/ipc/msg.c
+index caca67368cb5..52d634b0a65a 100644
+--- a/ipc/msg.c
++++ b/ipc/msg.c
+@@ -214,6 +214,7 @@ static void ss_wakeup(struct msg_queue *msq,
+ 	struct msg_sender *mss, *t;
+ 	struct task_struct *stop_tsk = NULL;
+ 	struct list_head *h = &msq->q_senders;
++	size_t msq_quota_used = 0;
+ 
+ 	list_for_each_entry_safe(mss, t, h, list) {
+ 		if (kill)
+@@ -233,7 +234,7 @@ static void ss_wakeup(struct msg_queue *msq,
+ 		 * move the sender to the tail on behalf of the
+ 		 * blocked task.
+ 		 */
+-		else if (!msg_fits_inqueue(msq, mss->msgsz)) {
++		else if (!msg_fits_inqueue(msq, msq_quota_used + mss->msgsz)) {
+ 			if (!stop_tsk)
+ 				stop_tsk = mss->tsk;
+ 
+@@ -241,6 +242,7 @@ static void ss_wakeup(struct msg_queue *msq,
+ 			continue;
+ 		}
+ 
++		msq_quota_used += mss->msgsz;
+ 		wake_q_add(wake_q, mss->tsk);
+ 	}
+ }
+-- 
+2.19.1
+
